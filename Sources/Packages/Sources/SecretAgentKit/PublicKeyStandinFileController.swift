@@ -21,48 +21,38 @@ public final class PublicKeyFileStoreController: Sendable {
     /// - Parameter clear: Whether or not any untracked files in the directory should be removed.
     public func generatePublicKeys(for secrets: [AnySecret], clear: Bool = false) throws {
         logger.log("Writing public keys to disk")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
         if clear {
             let validPaths = Set(secrets.map { URL.publicKeyPath(for: $0, in: directory) })
-                .union(Set(secrets.map { sshCertificatePath(for: $0) }))
             let contentsOfDirectory = (try? FileManager.default.contentsOfDirectory(atPath: directory.path())) ?? []
-            let fullPathContents = contentsOfDirectory.map { directory.appending(path: $0).path() }
+            let managedPathContents = contentsOfDirectory
+                .filter(isGeneratedPublicKeyFilename(_:))
+                .map { directory.appending(path: $0).path() }
 
-            let untracked = Set(fullPathContents)
+            let untracked = Set(managedPathContents)
                 .subtracting(validPaths)
             for path in untracked {
-                // string instead of fileURLWithPath since we're already using fileURL format.
-                try? FileManager.default.removeItem(at: URL(string: path)!)
+                try? FileManager.default.removeItem(at: URL(fileURLWithPath: path))
             }
         }
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: nil)
         for secret in secrets {
             let path = URL.publicKeyPath(for: secret, in: directory)
             let data = Data(keyWriter.openSSHString(secret: secret).utf8)
-            FileManager.default.createFile(atPath: path, contents: data, attributes: nil)
+            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
         }
         logger.log("Finished writing public keys")
     }
 
+}
 
-    /// Short-circuit check to ship enumerating a bunch of paths if there's nothing in the cert directory.
-    public var hasAnyCertificates: Bool {
-        do {
-            return try FileManager.default
-                .contentsOfDirectory(atPath: directory.path())
-                .filter { $0.hasSuffix("-cert.pub") }
-                .isEmpty == false
-        } catch {
+extension PublicKeyFileStoreController {
+
+    private func isGeneratedPublicKeyFilename(_ filename: String) -> Bool {
+        guard filename.hasSuffix(".pub") else {
             return false
         }
-    }
-
-    /// The path for a Secret's SSH Certificate public key.
-    /// - Parameter secret: The Secret to return the path for.
-    /// - Returns: The path to the SSH Certificate public key.
-    /// - Warning: This method returning a path does not imply that a key has a SSH certificates. This method only describes where it will be.
-    public func sshCertificatePath<SecretType: Secret>(for secret: SecretType) -> String {
-        let minimalHex = keyWriter.openSSHMD5Fingerprint(secret: secret).replacingOccurrences(of: ":", with: "")
-        return directory.appending(component: "\(minimalHex)-cert.pub").path()
+        let basename = filename.dropLast(4)
+        return basename.count == 32 && basename.allSatisfy(\.isHexDigit)
     }
 
 }
