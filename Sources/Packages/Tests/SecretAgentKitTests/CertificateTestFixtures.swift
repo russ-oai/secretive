@@ -19,7 +19,9 @@ enum CertificateTestFixtures {
 
     static func certificateBlob(
         for secret: Stub.Secret,
-        certificateType: String = ecdsa256CertificateType
+        certificateType: String = ecdsa256CertificateType,
+        validAfter: UInt64 = 0,
+        validBefore: UInt64 = .max
     ) -> Data {
         let keyBlob = writer.data(secret: secret)
         let reader = OpenSSHReader(data: keyBlob)
@@ -36,8 +38,8 @@ enum CertificateTestFixtures {
         certificateBlob.append(uint32Data(1))
         certificateBlob.append("key-id".lengthAndData)
         certificateBlob.append(Data().lengthAndData)
-        certificateBlob.append(uint64Data(0))
-        certificateBlob.append(uint64Data(0))
+        certificateBlob.append(uint64Data(validAfter))
+        certificateBlob.append(uint64Data(validBefore))
         certificateBlob.append(Data().lengthAndData)
         certificateBlob.append(Data().lengthAndData)
         certificateBlob.append(Data().lengthAndData)
@@ -46,10 +48,19 @@ enum CertificateTestFixtures {
         return certificateBlob
     }
 
-    static func certificateLine(for secret: Stub.Secret, comment: String) -> String {
+    static func certificateLine(
+        for secret: Stub.Secret,
+        comment: String,
+        validAfter: UInt64 = 0,
+        validBefore: UInt64 = .max
+    ) -> String {
         [
             ecdsa256CertificateType,
-            certificateBlob(for: secret).base64EncodedString(),
+            certificateBlob(
+                for: secret,
+                validAfter: validAfter,
+                validBefore: validBefore
+            ).base64EncodedString(),
             comment
         ].joined(separator: " ")
     }

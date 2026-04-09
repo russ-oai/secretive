@@ -12,8 +12,11 @@ After this change, one Secretive key can advertise any number of OpenSSH certifi
 - [x] 2026-03-16 20:38Z Confirmed current test coverage and current behavior with `xcodebuild test -project Sources/Secretive.xcodeproj -scheme PackageTests -destination 'platform=macOS' -only-testing:SecretAgentKitTests`.
 - [x] 2026-03-16 21:14Z Introduced shared certificate parsing and key-blob fingerprint helpers in `Sources/Packages/Sources/SSHProtocolKit`.
 - [x] 2026-03-16 21:29Z Refactored certificate discovery to scan certificate contents and build a one-to-many fingerprint index.
-- [x] 2026-03-16 21:38Z Stopped treating certificate files as generated files that may be deleted during `clear: true`.
+- [x] 2026-03-16 21:38Z Stopped treating certificate files as generated files that may be deleted solely by filename heuristics during `clear: true`.
 - [x] 2026-03-16 22:06Z Extended unit and integration tests for multi-certificate enumeration, fingerprint matching, cache clearing, and certificate-backed signing.
+- [x] 2026-04-09 14:40Z Added cleanup regressions proving `clear: true` must remove expired certificates and orphaned certificates while preserving active non-expired certificates.
+- [x] 2026-04-09 14:40Z Added shared SSH parsing for bare public keys plus certificate validity fields, then rewrote public-key-directory cleanup to prune stale generated keys, expired certificates, and orphaned certificates by parsed contents.
+- [x] 2026-04-09 14:40Z Verified the shared `PackageTests` scheme runs `CommonTests`, `XPCWrappersTests`, SSH protocol tests, and the new certificate cleanup regressions in the default `xcodebuild test -scheme PackageTests` path.
 
 ## Surprises & Discoveries
 
@@ -27,6 +30,8 @@ After this change, one Secretive key can advertise any number of OpenSSH certifi
   Evidence: `SSHAgentInputParser.certificatePublicKeyBlob(from:)`.
 - Observation: the shared `PackageTests` plan did not include `SSHProtocolKitTests`, so the new protocol-level coverage would not run in the normal `xcodebuild test -scheme PackageTests` path until the plan was updated.
   Evidence: `Sources/Config/Secretive.xctestplan` originally listed only `BriefTests`, `SecretKitTests`, and `SecretAgentKitTests`.
+- Observation: preserving every certificate file during `clear: true` leaves stale generated certificates behind indefinitely.
+  Evidence: `PublicKeyFileStoreControllerTests.clearGeneratedPublicKeysRemovesExpiredCertificates` and `clearGeneratedPublicKeysRemovesCertificatesForMissingKeys` both failed before the April 9 cleanup rewrite.
 
 ## Decision Log
 
@@ -39,19 +44,22 @@ After this change, one Secretive key can advertise any number of OpenSSH certifi
 - Decision: move certificate parsing into `SSHProtocolKit` as shared protocol logic.
   Rationale: both disk loading and sign-request normalization need the same certificate parsing behavior.
   Date/Author: 2026-03-16 / Codex
-- Decision: generated bare `.pub` stand-ins remain Secretive-managed; certificate files are treated as user-managed inputs and are never deleted by `clear: true`.
-  Rationale: supporting many certificates per key is impossible if the agent deletes files it did not generate.
-  Date/Author: 2026-03-16 / Codex
+- Decision: generated bare `.pub` stand-ins remain Secretive-managed, and certificate files are cleaned up by parsed certificate contents rather than filename shape.
+  Rationale: supporting many certificates per key still requires filename-agnostic matching, but the cleanup path must remove expired certificates and certificates whose subject key no longer corresponds to an active Secretive key.
+  Date/Author: 2026-04-09 / Codex
 - Decision: keep `OpenSSHKeyFingerprint` as a dedicated namespace utility and avoid public blob-based fingerprint APIs.
   Rationale: the fingerprint logic is shared by the writer and certificate parser, but callers should continue using the established `secret:` methods rather than a broader public surface.
   Date/Author: 2026-03-16 / Codex
 - Decision: remove `StoredCertificate` and keep the public certificate identity payload minimal.
   Rationale: once the cache stores parsed certificates directly, the extra wrapper and extra public metadata no longer provide value and just widen the structure.
   Date/Author: 2026-03-16 / Codex
+- Decision: add `OpenSSHPublicKeyReader` alongside `OpenSSHCertificateReader`.
+  Rationale: the cleanup path now needs to distinguish bare public keys from certificates by parsing the file contents, and keeping that logic in `SSHProtocolKit` avoids duplicating low-level OpenSSH parsing in `SecretAgentKit`.
+  Date/Author: 2026-04-09 / Codex
 
 ## Outcomes & Retrospective
 
-The refactor landed as planned. Certificate parsing now lives in `SSHProtocolKit`, certificate matching is content-driven by subject-key fingerprint, one key can advertise multiple certificates, certificate sign requests normalize to the underlying key blob, and `generatePublicKeys(clear: true)` no longer deletes user-managed certificate files. The new tests run against temp directories and fixture data, so the behavior is covered without touching the real `~/Library/.../PublicKeys` directory.
+The refactor landed, but the cleanup semantics changed after real-world review. Certificate parsing now lives in `SSHProtocolKit`, certificate matching is content-driven by subject-key fingerprint, one key can advertise multiple certificates, certificate sign requests normalize to the underlying key blob, and `generatePublicKeys(clear: true)` now removes stale generated bare keys, expired certificates, and certificates whose embedded subject key no longer matches an active Secretive key. Active non-expired certificates remain in place regardless of filename. The new tests run against temp directories and fixture data, so the behavior is covered without touching the real `~/Library/.../PublicKeys` directory.
 
 ## Context and Orientation
 
@@ -63,7 +71,7 @@ Milestone 1 introduces shared protocol helpers. Add a new parser in `Sources/Pac
 
 Milestone 2 replaces the one-to-one certificate cache with a one-to-many fingerprint index. `OpenSSHCertificateHandler` should stop asking for "the certificate path for this secret". Instead it should enumerate candidate `.pub` files in the public key directory, parse only the ones that are certificates, compute each certificate's subject key fingerprint, and store an ordered array of certificate identities under that fingerprint. `Agent.identities()` then asks for all certificate identities for a secret and appends them after the bare key. `reloadCertificates` should always rebuild the cache from scratch so deletion is observed immediately.
 
-Milestone 3 makes file ownership explicit and adds tests. `PublicKeyFileStoreController.generatePublicKeys(clear:)` should only prune generated bare public key stand-ins, never certificate files. Add temp-directory-based tests for handler loading and cleanup, and integration tests for agent enumeration and certificate-backed signing. The tests should use checked-in certificate fixtures or constants, not shell out to `ssh-keygen`, so the suite remains hermetic.
+Milestone 3 makes file ownership explicit and adds tests. `PublicKeyFileStoreController.generatePublicKeys(clear:)` should prune stale generated bare public key stand-ins, remove expired certificates, and remove certificates whose embedded subject key fingerprint no longer maps to an active Secretive key. Add temp-directory-based tests for handler loading and cleanup, and integration tests for agent enumeration and certificate-backed signing. The tests should use checked-in certificate fixtures or constants, not shell out to `ssh-keygen`, so the suite remains hermetic.
 
 ## Concrete Steps
 
@@ -95,7 +103,7 @@ The cache invalidation is correct when the temp directory is reloaded after dele
 
 The sign path is correct when a `signRequest` uses a certificate blob as its requested key and `Agent.handle` returns `SSH_AGENT_SIGN_RESPONSE` because the parser normalized the certificate to the underlying subject key blob.
 
-The cleanup logic is correct when `generatePublicKeys(clear: true)` removes stale generated bare `.pub` files but leaves user certificate files untouched.
+The cleanup logic is correct when `generatePublicKeys(clear: true)` removes stale generated bare `.pub` files, removes expired certificates, removes certificates for missing keys, and preserves non-expired certificates whose embedded subject key still belongs to an active Secretive key.
 
 ## Idempotence and Recovery
 
@@ -155,7 +163,7 @@ In `Sources/Packages/Sources/SecretAgentKit/OpenSSHCertificateHandler.swift` rep
        public func certificateIdentities<SecretType: Secret>(for secret: SecretType) -> [OpenSSHCertificateIdentity]
    }
 
-Delete `sshCertificatePath(for:)` from `PublicKeyFileStoreController`; it cannot model many certificates per key. Replace it with directory enumeration for certificate discovery and a managed-generated-files filter for cleanup.
+Delete `sshCertificatePath(for:)` from `PublicKeyFileStoreController`; it cannot model many certificates per key. Replace it with directory enumeration plus shared content parsers so cleanup can distinguish bare keys from certificates and make expiration/orphan decisions from parsed certificate metadata.
 
 In `Sources/Packages/Sources/SecretAgentKit/Agent.swift` update the init and enumeration call sites:
 
@@ -173,3 +181,5 @@ Prospective tests to add:
 - Extensions to `SecretAgentKitTests` or a new `PublicKeyFileStoreControllerTests.swift`
 
 Plan revision note: initial draft created after reviewing current agent/certificate code and existing tests, with scope expanded to include cleanup behavior because the current `clear: true` path would delete extra certificate files and would otherwise block the requested many-certificates-per-key behavior. Updated after implementation to record the shared certificate parser, the test-plan change needed to run `SSHProtocolKitTests`, and the final passing validation run.
+
+Plan revision note (2026-04-09): updated after follow-up review showed that preserving all certificate files on `clear: true` left stale generated certificates behind. The plan now documents the content-driven cleanup policy, the new `OpenSSHPublicKeyReader`, the certificate validity parsing, the added cleanup regressions, and the default `PackageTests` verification that now includes `CommonTests` and `XPCWrappersTests`.

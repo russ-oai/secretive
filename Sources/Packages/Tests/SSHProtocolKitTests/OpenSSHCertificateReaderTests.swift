@@ -9,7 +9,11 @@ import SSHProtocolKit
     let certificateReader = OpenSSHCertificateReader()
 
     @Test func readPublicKeyLinePreservesFullCommentAndFingerprint() throws {
-        let certificateBlob = certificateBlob(for: Constants.ecdsa256Secret)
+        let certificateBlob = certificateBlob(
+            for: Constants.ecdsa256Secret,
+            validAfter: 42,
+            validBefore: 4_102_444_800
+        )
         let line = [
             Constants.ecdsa256CertificateType,
             certificateBlob.base64EncodedString(),
@@ -22,6 +26,26 @@ import SSHProtocolKit
         #expect(parsed.comment == "deploy cert for production west")
         #expect(parsed.subjectKeyBlob == writer.data(secret: Constants.ecdsa256Secret))
         #expect(parsed.subjectKeyFingerprint == writer.openSSHSHA256Fingerprint(secret: Constants.ecdsa256Secret))
+        #expect(parsed.validAfter == 42)
+        #expect(parsed.validBefore == 4_102_444_800)
+    }
+
+    @Test func readCertificateBlobExposesExpirationState() throws {
+        let expiredCertificate = try certificateReader.readCertificateBlob(
+            certificateBlob(
+                for: Constants.ecdsa256Secret,
+                validBefore: 1
+            )
+        )
+        let activeCertificate = try certificateReader.readCertificateBlob(
+            certificateBlob(
+                for: Constants.ecdsa256Secret,
+                validBefore: .max
+            )
+        )
+
+        #expect(expiredCertificate.isExpired(at: Date(timeIntervalSince1970: 2)))
+        #expect(!activeCertificate.isExpired(at: Date(timeIntervalSince1970: 2)))
     }
 
     @Test func readCertificateBlobRejectsBarePublicKey() throws {
@@ -48,7 +72,12 @@ import SSHProtocolKit
 
 extension OpenSSHCertificateReaderTests {
 
-    private func certificateBlob(for secret: TestSecret, type: String? = nil) -> Data {
+    private func certificateBlob(
+        for secret: TestSecret,
+        type: String? = nil,
+        validAfter: UInt64 = 0,
+        validBefore: UInt64 = .max
+    ) -> Data {
         let keyBlob = writer.data(secret: secret)
         let reader = OpenSSHReader(data: keyBlob)
         let certificateType = type ?? Constants.ecdsa256CertificateType
@@ -66,8 +95,8 @@ extension OpenSSHCertificateReaderTests {
         certificateBlob.append(uint32Data(1))
         certificateBlob.append("key-id".lengthAndData)
         certificateBlob.append(Data().lengthAndData)
-        certificateBlob.append(uint64Data(0))
-        certificateBlob.append(uint64Data(0))
+        certificateBlob.append(uint64Data(validAfter))
+        certificateBlob.append(uint64Data(validBefore))
         certificateBlob.append(Data().lengthAndData)
         certificateBlob.append(Data().lengthAndData)
         certificateBlob.append(Data().lengthAndData)

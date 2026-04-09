@@ -40,13 +40,15 @@ public struct OpenSSHCertificateReader: Sendable {
             let certificateType = try reader.readNextChunkAsString()
             _ = try reader.readNextChunk() // nonce
             let subjectKeyBlob = try subjectKeyBlob(from: reader, certificateType: certificateType)
-            try skipSharedCertificateFields(reader)
+            let validity = try readSharedCertificateFields(reader)
             return ParsedCertificate(
                 certificateBlob: blob,
                 subjectKeyBlob: subjectKeyBlob,
                 subjectKeyFingerprint: OpenSSHKeyFingerprint.sha256(for: subjectKeyBlob),
                 comment: nil,
-                type: certificateType
+                type: certificateType,
+                validAfter: validity.validAfter,
+                validBefore: validity.validBefore
             )
         } catch let certificateError as OpenSSHCertificateError {
             throw certificateError
@@ -86,19 +88,23 @@ extension OpenSSHCertificateReader {
         }
     }
 
-    private func skipSharedCertificateFields(_ reader: OpenSSHReader) throws(OpenSSHCertificateError) {
+    private func readSharedCertificateFields(_ reader: OpenSSHReader) throws(OpenSSHCertificateError) -> CertificateValidity {
         do {
             _ = try reader.readNextBytes(as: UInt64.self) // serial
             _ = try reader.readNextBytes(as: UInt32.self) // cert type
             _ = try reader.readNextChunk() // key ID
             _ = try reader.readNextChunk() // valid principals
-            _ = try reader.readNextBytes(as: UInt64.self) // valid after
-            _ = try reader.readNextBytes(as: UInt64.self) // valid before
+            let validAfter = try reader.readNextBytes(as: UInt64.self)
+            let validBefore = try reader.readNextBytes(as: UInt64.self)
             _ = try reader.readNextChunk() // critical options
             _ = try reader.readNextChunk() // extensions
             _ = try reader.readNextChunk() // reserved
             _ = try reader.readNextChunk() // signature key
             _ = try reader.readNextChunk() // signature
+            guard reader.done else {
+                throw OpenSSHCertificateError.parsingFailed
+            }
+            return CertificateValidity(validAfter: validAfter, validBefore: validBefore)
         } catch {
             throw .parsingFailed
         }
@@ -116,6 +122,15 @@ extension OpenSSHCertificateReader {
 
 extension OpenSSHCertificateReader {
 
+    private struct CertificateValidity {
+        let validAfter: UInt64
+        let validBefore: UInt64
+    }
+
+}
+
+extension OpenSSHCertificateReader {
+
     /// The parsed contents of an OpenSSH certificate.
     public struct ParsedCertificate: Sendable, Hashable {
         public let certificateBlob: Data
@@ -123,19 +138,34 @@ extension OpenSSHCertificateReader {
         public let subjectKeyFingerprint: String
         public var comment: String?
         public let type: String
+        public let validAfter: UInt64
+        public let validBefore: UInt64
 
         public init(
             certificateBlob: Data,
             subjectKeyBlob: Data,
             subjectKeyFingerprint: String,
             comment: String?,
-            type: String
+            type: String,
+            validAfter: UInt64,
+            validBefore: UInt64
         ) {
             self.certificateBlob = certificateBlob
             self.subjectKeyBlob = subjectKeyBlob
             self.subjectKeyFingerprint = subjectKeyFingerprint
             self.comment = comment
             self.type = type
+            self.validAfter = validAfter
+            self.validBefore = validBefore
+        }
+
+        public func isExpired(at date: Date = .now) -> Bool {
+            guard validBefore != .max else {
+                return false
+            }
+
+            let currentTimestamp = max(0, Int64(date.timeIntervalSince1970))
+            return validBefore <= UInt64(currentTimestamp)
         }
     }
 
