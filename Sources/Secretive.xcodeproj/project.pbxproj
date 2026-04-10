@@ -1490,7 +1490,7 @@
 				50617D9C23FCE48E0099B055 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Test;
+			defaultConfigurationName = Release;
 		};
 		50617D9D23FCE48E0099B055 /* Build configuration list for PBXNativeTarget "Secretive" */ = {
 			isa = XCConfigurationList;
@@ -1500,7 +1500,7 @@
 				50617D9F23FCE48E0099B055 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Test;
+			defaultConfigurationName = Release;
 		};
 		50692D1F2E6FDB880043C7BB /* Build configuration list for PBXNativeTarget "SecretiveUpdater" */ = {
 			isa = XCConfigurationList;
@@ -1510,7 +1510,7 @@
 				50692D222E6FDB880043C7BB /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Test;
+			defaultConfigurationName = Release;
 		};
 		50692E5D2E6FF9D20043C7BB /* Build configuration list for PBXNativeTarget "SecretAgentInputParser" */ = {
 			isa = XCConfigurationList;
@@ -1520,7 +1520,7 @@
 				50692E602E6FF9D20043C7BB /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Test;
+			defaultConfigurationName = Release;
 		};
 		50A3B79A24026B7600D209EA /* Build configuration list for PBXNativeTarget "SecretAgent" */ = {
 			isa = XCConfigurationList;
@@ -1530,7 +1530,7 @@
 				50A3B79C24026B7600D209EA /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Test;
+			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 
